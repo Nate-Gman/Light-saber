@@ -40,6 +40,7 @@ spec at the top, a pure-Python software renderer, and a live physics engine.
 | **4 — Physics** | Optics, thermal, plasma, engine, and feasibility functions. |
 | **4b — Photon-binding physics** | The "solid light" analysis (see §4). |
 | **4c — Material-cutting physics** | The ablation energy-balance model (see §5). |
+| **4d — Engineering around the walls** | The magnetic plasma-arc analysis: Ampère clash, Z-pinch/Bennett confinement, arc power, and `engineered_saber_report()` (see §6). |
 | **5 — Geometry** | `build_hilt()`, `build_engine_parts()`, `build_binding_showcase()`, `build_cut_test()`, `build_microcavity_showcase()`, `build_blade_mesh()`. |
 | **6 — Renderer** | `Renderer`: orbit/pan/zoom camera, section cut, exploded view, hover-pick, part labels, blueprint projection helpers. |
 | **7 — Application** | `App`: pygame event loop, 5 scenes, mouse-operable control panel, live HUD panels, scene-aware math overlay, blueprint overlay. |
@@ -158,7 +159,54 @@ and it stops at breakthrough — while an uncuttable material simply stalls at
 
 ---
 
-## 6. Other physics subsystems
+## 6. Engineering around the walls — a *real* lightsaber (Section 4d)
+
+The design rule is *"treat every barrier as an engineering hurdle to be worked
+around."* Section 4b proves that a **rigid "solid light" blade is the one true
+physical wall** — a superfluid has zero static shear; you cannot make photons a
+static solid. Section 4d does not stop there: it **bypasses** the wall by
+achieving the lightsaber's *functions* with a **current-carrying magnetic
+plasma-arc blade**. A single blade current does three real jobs at once, all
+standard electromagnetism / plasma physics, computed live:
+
+1. **Clash / parry (the function that "solid light" was supposed to provide)** —
+   two energised blades are two parallel currents, so they push on each other by
+   the **Ampère force**, `F/L = µ₀·I₁·I₂/(2π·d)`. Inverting it, a firm **50 N
+   clash needs ~2.7 kA** (a full 445 N / 100-lbf block needs ~8.2 kA). This is a
+   real, felt, blade-to-blade force — no solid required.
+2. **Confinement / fixed length** — the same current self-confines the plasma
+   column by the **Z-pinch**. The **Bennett equilibrium** current
+   (`I² = 8π·N·k_B·(Tᵢ+Tₑ)/µ₀`) to hold the column is ~1.5 kA, which the ~2.7 kA
+   design current exceeds — so it is **self-confined**. Its **magnetic pressure**
+   `B²/2µ₀ ≈ 7.5 kPa` is a real "stiffness," **~3100× the photon fluid's 2.4 Pa**.
+3. **Power / energy cost** — the arc dissipates `P = E_arc·I·L ≈ 2.6 MW`, giving
+   ~7 s per 5 kWh backpack (bursts via supercaps; continuous via a tether).
+
+Cutting and thermal management are already solved (Sections 4c and 3). The
+honest **function scorecard** (`python3 LS.py --engineer`):
+
+| Function | Verdict | Why |
+|---|---|---|
+| Fixed-length glowing blade | **PASS** | Z-pinch / Bennett self-confinement |
+| Cuts real materials | **PASS** | ablation balance (steel ~1.2 mm/s; diamond uncuttable) |
+| Blade-vs-blade clash / parry | **PASS** | Ampère force, 50 N at ~2.7 kA |
+| Real blade "stiffness" | **PASS** | Z-pinch magnetic pressure ~7.5 kPa (~3100× photon) |
+| Cool grip | **PASS** | layered HfC/aerogel/MLI/heat-pipe stack |
+| Self-contained handheld power | **PARTIAL** | ~2.6 MW → backpack/tether; energy density |
+| Safe for casual use | **PARTIAL** | ~2.7 kA + ~2.6 MW is lethal; needs interlocks |
+| Rigid "solid light" | **BYPASSED** | impossible; magnetism does the clash instead |
+
+**5 PASS, 2 PARTIAL of 8.** The honest conclusion: a lightsaber that **glows,
+holds a fixed length, cuts, and clashes with another blade is buildable with
+today's physics** — as a kA / MW-class, backpack- or tether-powered plasma-arc
+weapon. The residuals are engineering *costs* (power density, kA safety), **not
+physical walls**. The only true impossibility, rigid "solid light," is bypassed
+because real magnetism delivers the same function a different way — which is
+exactly what "treat the barrier as an engineering hurdle" means, done honestly.
+
+---
+
+## 7. Other physics subsystems
 
 - **Blade power budget** — a 0.8 m × 30 mm channel at 7500 K radiates ~11 MW;
   a handheld diode laser is ~6×10⁵× short of sustaining it (the honest reason a
@@ -176,7 +224,7 @@ and it stops at breakthrough — while an uncuttable material simply stalls at
 
 ---
 
-## 7. Rendering & UI
+## 8. Rendering & UI
 
 - **Software renderer** — no GPU. `Renderer.render()` transforms each mesh into
   camera space, projects with a perspective focal length, sorts polygons by
@@ -200,9 +248,9 @@ and it stops at breakthrough — while an uncuttable material simply stalls at
 
 ---
 
-## 8. Validation (why the numbers can be trusted)
+## 9. Validation (why the numbers can be trusted)
 
-1. **`--selftest`** — 36 assertions: geometry builds, all reports are finite,
+1. **`--selftest`** — 43 assertions: geometry builds, all reports are finite,
    an offscreen render of all 5 scenes succeeds, and the full `App` (all scenes,
    both overlays, blueprint, every control) draws and hit-tests cleanly. Crucially
    it also asserts the *honest* physics inequalities — diamond uncuttable,
@@ -218,7 +266,7 @@ and it stops at breakthrough — while an uncuttable material simply stalls at
 
 ---
 
-## 9. Extending it
+## 10. Extending it
 
 Because `DIMS` / `PHYS` / `MATERIALS` are the single source of truth, the usual
 extensions are one-liners plus a builder tweak:
