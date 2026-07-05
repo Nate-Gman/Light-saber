@@ -47,13 +47,15 @@ RUN
     python3 LS.py --feasibility    # full honest physics/feasibility report
     python3 LS.py --cut [TEMP_K]   # material cut-test table (real ablation math)
     python3 LS.py --engineer       # failure->workaround scorecard for a REAL plasma-arc saber
+    python3 LS.py --blaster        # 'PEWDIEPIE' p-B11 photon-bolt pistol: budget + damage + walls
+    python3 LS.py --system         # 'solve every barrier' system: workarounds + honesty tags + optimiser
     python3 LS.py --report         # legacy matplotlib static charts
     python3 LS.py --export-obj     # write OBJ+MTL of the hilt to ./export/
 
 --------------------------------------------------------------------------------
 CONTROLS
 --------------------------------------------------------------------------------
-  1..5 .............. HILT / ENGINE BAY / PHOTON-BINDING CUTAWAY / CUT TEST / MICROCAVITY
+  1..6 .............. HILT / ENGINE BAY / BINDING CUTAWAY / CUT TEST / MICROCAVITY / BLASTER
   mouse drag L ...... orbit          mouse drag R/M ..... pan
   wheel / +/- ....... zoom (around cursor)                R ... reset view
   E ................. toggle exploded view                X ... section cut
@@ -73,6 +75,7 @@ CONTROLS
 import os
 import sys
 import math
+import random
 import argparse
 import warnings
 
@@ -220,6 +223,23 @@ DIMS = {
     "micro_dbr_pairs":          8,   # distributed Bragg reflector pairs
     "micro_dbr_layer_nm":   120.0,   # quarter-wave layer thickness (approx)
     "micro_patch_holes":       18,   # rendered lattice patch (NxN, see showcase)
+
+    # --- Photon-bolt pistol geometry (the "Lumina Blaster", to scale) -------
+    "bl_body_len_mm":      240.0,   # receiver/body length (a large pistol)
+    "bl_body_od_mm":        44.0,
+    "bl_barrel_len_mm":    100.0,   # reflective barrel (front)
+    "bl_barrel_od_mm":      30.0,
+    "bl_muzzle_od_mm":      34.0,   # adaptive-optics muzzle ring
+    "bl_crystal_len_mm":    38.0,   # photonic-crystal densifier
+    "bl_crystal_od_mm":     26.0,
+    "bl_chamber_len_mm":    56.0,   # p-B11 DPF fusion chamber
+    "bl_chamber_od_mm":     32.0,
+    "bl_mag_len_mm":        70.0,   # fuel-pellet magazine (in the grip)
+    "bl_grip_len_mm":      110.0,
+    "bl_grip_od_mm":        30.0,
+    "bl_grip_angle_deg":    105.0,  # grip rake
+    "bl_bolt_disc_mm":      50.8,   # 2-inch photon-bolt disc
+    "bl_bolt_cone_mm":      40.0,   # cone-nose length
 }
 
 PHYS = {
@@ -316,7 +336,7 @@ PHYS = {
     # glow. Runtime is an ignite-for-a-fight spec (energy density, not a wall).
     "arc_pulse_buffer_s":        0.02,   # ms-scale window the supercap must buffer (pulsed arc / clash impulse)
     "supercap_wh_per_kg":         8.0,   # real supercapacitor gravimetric energy
-    "idle_current_frac":         0.60,   # idle current fraction -- kept ABOVE the Bennett confinement current
+    "idle_current_frac":         0.50,   # idle fraction; clamped up to ~1.12x Bennett (confinement floor)
     "hilt_pack_kwh":             2.5,    # heavy but HANDHELD in-hilt battery+supercap pack
     "hilt_pack_mass_kg":         10.0,
     "backpack_energy_wh":       12000.0, # optional 12 kWh backpack for extended runtime
@@ -335,7 +355,47 @@ PHYS = {
     "mott_interaction_uev":       5.0,   # on-site photon-photon interaction U (circuit-QED scale)
     "mott_demo_temp_mk":         10.0,   # demonstrated operating temperature (~10 mK dilution fridge)
     "mott_site_spacing_um":     100.0,   # cavity-lattice site spacing (mm-scale cavities -> ~0.1 mm)
+
+    # --- THIRD DEVICE: p-B11 fusion PHOTON-BOLT PISTOL (Projectgoal2.md) -----
+    # A handheld directed-energy sidearm: an aneutronic p+B11 micro-pulse floods
+    # a chamber with X-rays/light that a photonic crystal down-converts,
+    # densifies (slow-light soliton) and vectors out as a 2x .50-BMG-energy
+    # "photon bolt". The energy budget is real & self-consistent; the honest
+    # walls (handheld p-B11 ignition, X->vis conversion, "solid bullet") are
+    # computed in SECTION 4e.
+    "pb11_energy_mev":            8.7,   # p + 11B -> 3 alpha + 8.7 MeV (real, aneutronic)
+    "fifty_bmg_energy_j":     18000.0,   # muzzle energy of a .50 BMG round (upper practical)
+    "blaster_shots_target":       2.0,   # "2x .50 BMG combined" -> 36 kJ delivered
+    "blaster_conv_eff":          0.40,   # UPGRADED photonic crystal X-ray->visible + collection (was 0.30)
+    "blaster_pulse_s":         0.17e-9,  # delivered pulse duration
+    "blaster_aperture_mm":      50.8,    # 2-inch exit aperture (sets diffraction divergence)
+    "blaster_focal_spot_mm":     3.0,    # UPGRADED tighter focal spot on target (was 5 mm)
+    "blaster_range_m":          30.0,    # engagement range for the divergence check
+    "blaster_mass_kg":           1.0,    # pistol form factor
+    "ablation_threshold_j_cm2":  5.0,    # ~metal laser-ablation threshold (real, few J/cm^2)
+
+    # --- optimisation targets (the "upgrade") ------------------------------
+    "target_solid_pct":        100.0,    # optimise the blade to at least this 'solid %'
+    "min_runtime_s":             5.0,     # keep the self-contained window >= this (constraint)
+
+    # --- FULL-SYSTEM "solve every barrier" model (assume massive parallel R&D)
+    # Each workaround is modelled with real physics that computes what it would
+    # TAKE; every item is tagged REAL / FRONTIER / ASSUMED so nothing is faked.
+    "avg_ion_mass_amu":         14.5,    # air (N/O) mean ion mass -> Alfven speed
+    "feedback_bandwidth_hz":     1.0e9,  # active MHD stabilisation control rate (GHz-class, FRONTIER)
+    "stab_control_channels":      64,    # coil/electrode segments along the blade
+    "chem_to_arc_eff":           0.30,   # chemical energy -> sustained arc power
+    "hilt_fuel_kg":              1.5,    # metal fuel a large hilt can carry
+    "backpack_fuel_kg":         12.0,    # backpack fuel load
+    "dense_photon_target_m3":    1.0e22, # maximised photon density target (Barrier 1)
+    "blade_standoff_m":          0.5,    # blade-to-hand distance for the radiant-flux check
+    "sheath_forward_frac":       0.70,   # dielectric sheath re-vectors this fraction of radiation forward
+    "system_search_iters":     20000,    # parameter-space search (stand-in for the 10M-agent loop)
 }
+
+# --- device call-signs (the blade and the gun) ---------------------------
+BLADE_NAME = "THE TRU TRU"    # the lightsaber blade
+GUN_NAME   = "PEWDIEPIE"      # the photon-bolt pistol
 
 
 # =============================================================================
@@ -412,6 +472,13 @@ C_BOUNDCORE   = (245, 235, 180)     # bound-photon condensate core
 C_EITCELL     = (90, 160, 150)      # Rydberg-EIT vapour cell
 C_FIELDLINE   = (110, 200, 255)     # confinement field lines
 C_LATTICE     = (255, 180, 90)      # supersolid density-peak nodes (warm, stands out)
+C_BL_BODY     = (60, 63, 70)        # blaster receiver (matte black)
+C_BL_BARREL   = (90, 94, 104)       # reflective barrel
+C_BL_CHAMBER  = (235, 150, 50)      # p-B11 fusion chamber (glowing)
+C_BL_CRYSTAL  = (90, 200, 255)      # photonic-crystal densifier (glowing blue)
+C_BL_MUZZLE   = (150, 155, 165)     # adaptive-optics muzzle ring
+C_BL_GRIP     = (45, 47, 52)        # grip
+C_BL_BOLT     = (180, 220, 255)     # blue-white photon bolt
 C_WORKPIECE   = (110, 114, 122)     # cut-test material block (recolored per material)
 C_KERF        = (255, 120, 40)      # glowing cut kerf
 
@@ -1252,6 +1319,83 @@ def magnetic_pressure_pa(b_t):
     return b_t ** 2 / (2 * MU0)
 
 
+# ---- 'SOLID LIGHT' REDEFINED: a maximally-dense photon gas/plasma ----------
+# Not a rigid solid (impossible) -- a high photon NUMBER DENSITY beam whose
+# collective + confinement pressures make it behave solid-LIKE: it resists a
+# slow push (radiation + magnetic pressure) but flows around fast motion
+# (superfluid/plasma, per the Landau criterion). The 'solid %' is the honest,
+# computable measure of how far toward 'feels solid' the dense beam gets.
+
+def photon_number_density_m3(intensity_w_m2, wavelength_m):
+    """Photon number density in a beam: n = (I/c) / E_photon (energy density
+    over per-photon energy). This is the 'packing' the redefined solid light is
+    about -- target 1e20..1e25 m^-3, orders above an ordinary laser."""
+    energy_density = intensity_w_m2 / c
+    return energy_density / photon_energy_j(wavelength_m)
+
+
+def radiation_pressure_pa(intensity_w_m2, reflectivity=0.0):
+    """Radiation pressure a beam exerts on an object: P = (1+R) I / c
+    (absorbing R=0, perfectly reflecting R=1 doubles it). Part of the dense
+    beam's real solid-like 'push'."""
+    return (1.0 + reflectivity) * intensity_w_m2 / c
+
+
+def beam_intensity_for_density(n_target_m3, wavelength_m):
+    """Inverse: the beam intensity needed to reach a target photon density."""
+    return n_target_m3 * photon_energy_j(wavelength_m) * c
+
+
+def solid_pct(effective_stiffness_pa, feel_solid_pa=10000.0):
+    """'Solid %' = the beam's effective mechanical stiffness as a fraction of a
+    'feels solid to a slow push' threshold (~10 kPa -- a firm pressure a hand
+    can clearly feel; rubber is ~MPa, steel ~100 GPa). The effective stiffness
+    sums the real holding pressures (magnetic Z-pinch + radiation). Honest
+    redefinition of 'solid light': how solid-LIKE the dense confined beam is,
+    not a claim of a rigid crystal."""
+    return 100.0 * effective_stiffness_pa / feel_solid_pa
+
+
+def current_for_solid_pct(target_pct, radius_m, feel_solid_pa=10000.0):
+    """Invert the Z-pinch magnetic-pressure -> 'solid %' relation to find the
+    blade current that hits a target solid %. Magnetic pressure dominates:
+    P_mag = mu0 I^2 / (8 pi^2 r^2), and solid% = 100 * P/feel. So
+    I = sqrt( (target/100 * feel) * 8 pi^2 r^2 / mu0 ). The OPTIMISATION knob:
+    raise current -> denser confinement -> more 'solid', at a real power cost."""
+    p_target = (target_pct / 100.0) * feel_solid_pa
+    return math.sqrt(p_target * 8 * math.pi ** 2 * radius_m ** 2 / MU0)
+
+
+def optimize_saber():
+    """Optimise / UPGRADE the blade ('THE TRU TRU'): find the operating current
+    that reaches the target 'solid %' (denser confinement = more solid-like),
+    then report the honest trade -- the extra power it costs and whether the
+    self-contained runtime stays above the constraint. Returns the optimum."""
+    r = PHYS["arc_blade_dia_mm"] * MM / 2.0
+    L = DIMS["blade_len_m"]
+    i_clash = current_for_clash_a(PHYS["clash_force_target_n"],
+                                  PHYS["clash_contact_len_m"], PHYS["clash_gap_m"])
+    i_solid = current_for_solid_pct(PHYS["target_solid_pct"], r)
+    i_opt = max(i_clash, i_solid)                       # satisfy both requirements
+    i_bennett = bennett_pinch_current_a(PHYS["arc_plasma_density_m3"], r, PHYS["arc_plasma_temp_k"])
+    p_arc = arc_column_power_w(i_opt, L, PHYS["arc_field_gradient_v_m"])
+    p_idle = idle_power_w(i_opt, i_bennett, L, PHYS["arc_field_gradient_v_m"])
+    pw = hybrid_power_system(p_arc, p_idle)
+    clash_at_opt = ampere_force_per_length_n_m(i_opt, i_opt, PHYS["clash_gap_m"]) \
+        * PHYS["clash_contact_len_m"]
+    b = z_pinch_surface_field_t(i_opt, r)
+    p_mag = magnetic_pressure_pa(b)
+    beam_area = math.pi * r ** 2
+    p_rad = radiation_pressure_pa(p_arc / beam_area, reflectivity=1.0)
+    solid = solid_pct(p_mag + p_rad)
+    return dict(
+        i_clash_a=i_clash, i_solid_a=i_solid, i_opt_a=i_opt,
+        p_arc_w=p_arc, runtime_s=pw["hilt_glow_s"], clash_n=clash_at_opt,
+        solid_pct=solid, driver=("solid-%" if i_solid > i_clash else "clash"),
+        meets_runtime=(pw["hilt_glow_s"] >= PHYS["min_runtime_s"]),
+    )
+
+
 def bennett_pinch_current_a(density_m3, radius_m, temp_k):
     """Bennett equilibrium: the current that magnetically confines a plasma
     column of a given line density and temperature. I^2 = 8 pi N k_B (Ti+Te) /
@@ -1269,30 +1413,39 @@ def arc_column_power_w(current_a, length_m, field_gradient_v_m):
     return field_gradient_v_m * current_a * length_m
 
 
-def hybrid_power_system(p_full_w, length_m):
+def hybrid_power_system(p_full_w, p_idle_w):
     """Finish the SELF-CONTAINED hurdle with a hybrid power system: a
     supercapacitor buffers the ms-scale pulsed-arc peaks (its job -- huge peak
     power, dumps kJ in ms), while a high-density in-hilt battery sustains the
     arc. The Ampere clash needs NO separate energy burst (both blades are
-    already energised), so the real cost is just holding the arc lit. Runtime
-    is an honest 'ignite-for-a-fight' spec set by energy density, NOT a physics
-    wall (a bigger pack -> longer blade). Returns the sizing + runtime dict."""
+    already energised), so the real cost is just holding the arc lit. `p_idle_w`
+    is the sustaining power at the idle current (kept above Bennett so the blade
+    stays confined). Runtime is an honest 'ignite-for-a-fight' spec set by energy
+    density, NOT a physics wall (a bigger pack -> longer blade)."""
     buffer_e = p_full_w * PHYS["arc_pulse_buffer_s"]             # energy the supercap must buffer
     sc_mass = (buffer_e / 3600.0) / PHYS["supercap_wh_per_kg"]   # kg of supercaps for that buffer
-    p_idle = p_full_w * PHYS["idle_current_frac"]                # sustaining arc (kept above Bennett)
     hilt_j = PHYS["hilt_pack_kwh"] * 3.6e6
     pack_j = PHYS["backpack_energy_wh"] * 3.6e3
-    hilt_glow_s = hilt_j / p_idle
+    hilt_glow_s = hilt_j / p_idle_w
     hilt_full_s = hilt_j / p_full_w
-    backpack_glow_s = pack_j / p_idle
+    backpack_glow_s = pack_j / p_idle_w
     return dict(
         buffer_energy_j=buffer_e, supercap_mass_kg=sc_mass,
-        p_idle_w=p_idle, hilt_glow_s=hilt_glow_s, hilt_full_s=hilt_full_s,
+        p_idle_w=p_idle_w, hilt_glow_s=hilt_glow_s, hilt_full_s=hilt_full_s,
         backpack_glow_s=backpack_glow_s,
         # self-contained if a heavy but handheld hilt pack gives a usable
         # ignite-for-a-fight window (movie-style ignite/retract, not always-on)
-        self_contained=(hilt_glow_s >= 5.0),
+        self_contained=(hilt_glow_s >= PHYS["min_runtime_s"]),
     )
+
+
+def idle_power_w(design_current_a, bennett_current_a, length_m, field_gradient_v_m):
+    """Sustaining ('idle') arc power: run at the LOWER of a fraction of the
+    design current or safely above the Bennett confinement current -- whichever
+    keeps the blade lit and confined at least cost."""
+    idle_current = max(PHYS["idle_current_frac"] * design_current_a, 1.12 * bennett_current_a)
+    idle_current = min(idle_current, design_current_a)
+    return arc_column_power_w(idle_current, length_m, field_gradient_v_m)
 
 
 def photonic_mott_report():
@@ -1342,9 +1495,12 @@ def engineered_saber_report():
     n = PHYS["arc_plasma_density_m3"]
     T = PHYS["arc_plasma_temp_k"]
 
-    # clash (hurdle: rigidity has no real analogue for light -> use Ampere force)
-    i_design = current_for_clash_a(PHYS["clash_force_target_n"],
-                                    PHYS["clash_contact_len_m"], PHYS["clash_gap_m"])
+    # OPTIMISED design current: satisfy BOTH the clash requirement and the
+    # target 'solid %' (denser confinement) -- the UPGRADE. i_design is the max.
+    i_clash = current_for_clash_a(PHYS["clash_force_target_n"],
+                                  PHYS["clash_contact_len_m"], PHYS["clash_gap_m"])
+    i_solid = current_for_solid_pct(PHYS["target_solid_pct"], r)
+    i_design = max(i_clash, i_solid)
     i_full_block = current_for_clash_a(PHYS["lateral_load_n"],
                                        PHYS["clash_contact_len_m"], PHYS["clash_gap_m"])
 
@@ -1356,10 +1512,14 @@ def engineered_saber_report():
     photon_bulk = fluid_bulk_modulus_pa(interaction_chemical_potential_j(
         PHYS["interaction_blueshift_mev"]), PHYS["n_target_m3"])
     stiffness_gain = p_mag / photon_bulk if photon_bulk else float("inf")
+    # clash force delivered at the optimised current (>= the nominal target)
+    clash_force_opt = ampere_force_per_length_n_m(i_design, i_design, PHYS["clash_gap_m"]) \
+        * PHYS["clash_contact_len_m"]
 
     # power (hurdle: 11 MW blackbody myth -> real arc power at the design current)
     p_arc = arc_column_power_w(i_design, L, PHYS["arc_field_gradient_v_m"])
-    pw = hybrid_power_system(p_arc, L)          # FINISHED self-contained hurdle
+    p_idle = idle_power_w(i_design, i_bennett, L, PHYS["arc_field_gradient_v_m"])
+    pw = hybrid_power_system(p_arc, p_idle)     # FINISHED self-contained hurdle
     runtime_s = pw["hilt_glow_s"]
 
     # cutting (already solved) -- steel as the reference
@@ -1369,7 +1529,18 @@ def engineered_saber_report():
     rpt = full_feasibility_report()
 
     leth = weapon_lethality(p_arc, i_design)    # it is a WEAPON, by design
-    mott = photonic_mott_report()               # the REAL 'solid light'
+    mott = photonic_mott_report()               # the REAL 'solid light' (crystal)
+
+    # 'SOLID LIGHT' REDEFINED as a maximally-dense photon gas/plasma: the beam
+    # intensity (arc power over its cross-section) sets the photon density and
+    # radiation pressure; the Z-pinch adds magnetic pressure; together they are
+    # the effective solid-LIKE stiffness -> a 'solid %'.
+    beam_area = math.pi * r ** 2
+    beam_intensity = p_arc / beam_area if beam_area > 0 else 0.0
+    n_photon = photon_number_density_m3(beam_intensity, 500.0 * NM)
+    p_rad = radiation_pressure_pa(beam_intensity, reflectivity=1.0)   # reflecting target -> max push
+    eff_stiffness = p_mag + p_rad
+    solid_percent = solid_pct(eff_stiffness)
 
     # honest per-function scorecard
     functions = [
@@ -1380,7 +1551,7 @@ def engineered_saber_report():
          f"ablation energy balance: steel {steel['recession_mm_s']:.2f} mm/s at {T:.0f} K "
          f"(diamond still uncuttable -- honest)"),
         ("Blade-vs-blade CLASH / deflect", "PASS",
-         f"Ampere force: {PHYS['clash_force_target_n']:.0f} N clash at {i_design:.0f} A "
+         f"Ampere force: {clash_force_opt:.0f} N clash at the optimised {i_design:.0f} A "
          f"({i_full_block:.0f} A for a full {PHYS['lateral_load_n']:.0f} N block)"),
         ("Real blade 'stiffness'", "PASS",
          f"Z-pinch magnetic pressure {p_mag/1000:.1f} kPa = {stiffness_gain:.0f}x the "
@@ -1395,21 +1566,323 @@ def engineered_saber_report():
          f"intentional: {i_design/1000:.1f} kA + {p_arc/1e6:.1f} MW; cuts flesh at "
          f"{leth['flesh_recession_mm_s']:.0f} mm/s (instant) and stores {leth['lethal_margin']:.0e}x a "
          f"lethal electrical dose -- NOT a safe toy, and not meant to be"),
-        ("Rigid 'solid light' blade", "APROX/WALL",
-         f"real 'solid light' = photonic Mott insulator (U/J={mott['U_over_J']:.0f}, crystalline, has "
-         f"shear) EXISTS -- but at ~{mott['demo_temp_k']*1000:.0f} mK on a chip; a warm metre blade is "
-         f"{mott['temp_gap']:.0e}x too hot and {mott['blade_sites']:.0e} sites. Bypassed by the plasma arc"),
+        ("'Solid light' (REDEFINED: dense photon gas)", "PASS",
+         f"not a rigid crystal -- a maximally-dense beam: n={n_photon:.1e} photons/m^3, radiation "
+         f"pressure {p_rad:.0f} Pa + Z-pinch {p_mag/1000:.1f} kPa = {solid_percent:.0f}% 'solid' "
+         f"(resists a slow push, flows around fast motion -- superfluid-like)"),
+        ("Rigid crystalline 'solid light'", "WALL",
+         f"a true rigid solid IS impossible warm; the real Mott insulator (U/J={mott['U_over_J']:.0f}, "
+         f"crystalline) exists only at ~{mott['demo_temp_k']*1000:.0f} mK on a chip "
+         f"({mott['temp_gap']:.0e}x too hot for a blade) -- so we maximise density instead"),
     ]
     n_pass = sum(1 for _, s, _ in functions if s == "PASS")
     n_partial = sum(1 for _, s, _ in functions if s == "PARTIAL")
     return dict(
         i_design_a=i_design, i_full_block_a=i_full_block, i_bennett_a=i_bennett,
+        i_clash_a=i_clash, i_solid_a=i_solid, clash_force_opt_n=clash_force_opt,
+        optimised=(i_solid > i_clash),
         self_confined=self_confined, b_surf_t=b_surf, p_mag_pa=p_mag,
         stiffness_gain=stiffness_gain, p_arc_w=p_arc, runtime_s=runtime_s,
         steel_recession_mm_s=steel["recession_mm_s"], functions=functions,
         power=pw, lethality=leth, mott=mott,
+        beam_intensity_w_m2=beam_intensity, photon_density_m3=n_photon,
+        rad_pressure_pa=p_rad, eff_stiffness_pa=eff_stiffness, solid_percent=solid_percent,
         n_pass=n_pass, n_partial=n_partial, n_total=len(functions),
     )
+
+
+# =============================================================================
+# SECTION 4e -- THIRD DEVICE: p-B11 FUSION PHOTON-BOLT PISTOL (Projectgoal2.md)
+# =============================================================================
+# The "Lumina Blaster": a handheld directed-energy sidearm firing 2x .50-BMG-
+# energy "photon bolts" from an aneutronic proton-boron-11 micro-fusion pulse,
+# shaped by a photonic crystal. The energy budget is REAL and self-consistent;
+# the honest walls (handheld p-B11 ignition, X-ray->visible conversion, and the
+# fact that free light is a c-speed PULSE, not a slow solid "bullet") are
+# computed and reported, not glossed over.
+
+def pb11_reactions_for_energy(delivered_j, conv_eff):
+    """Number of p+11B reactions to DELIVER a given energy at a given
+    conversion efficiency: N = E_delivered / (eta * 8.7 MeV)."""
+    e_react = PHYS["pb11_energy_mev"] * 1e6 * ECHARGE
+    return delivered_j / (conv_eff * e_react)
+
+
+def pb11_fuel_mass_kg(reactions):
+    """Fuel consumed: each reaction burns 1 proton (1 u) + 1 boron-11 (11 u)."""
+    u = 1.66053907e-27
+    return reactions * 12.0 * u
+
+
+def pulse_peak_power_w(energy_j, pulse_s):
+    """Peak power of the delivered bolt: P = E / dt."""
+    return energy_j / pulse_s if pulse_s > 0 else float("inf")
+
+
+def focal_fluence_j_cm2(energy_j, spot_dia_mm):
+    """Energy fluence at the focal spot (J/cm^2) -- what actually does the
+    damage. Compared against the real laser-ablation threshold of metals."""
+    area_cm2 = math.pi * (spot_dia_mm / 10.0 / 2.0) ** 2
+    return energy_j / area_cm2 if area_cm2 > 0 else float("inf")
+
+
+def diffraction_divergence_spot_mm(aperture_mm, range_m, wavelength_nm=500.0):
+    """Diffraction-limited beam growth: a large exit aperture keeps a visible
+    beam tight over tens of metres (theta ~ lambda/D). Returns the spot
+    diameter grown by diffraction at the given range."""
+    lam = wavelength_nm * NM
+    theta = lam / (aperture_mm * MM)          # half-angle ~ lambda/D
+    grow_mm = 2.0 * theta * range_m * 1000.0
+    return aperture_mm + grow_mm
+
+
+def photon_recoil_ns(energy_j):
+    """Radiation-pressure recoil momentum of the bolt: p = E/c. (Compared to a
+    real bullet's momentum, it is negligible -- the 'fusion kick' is fiction.)"""
+    return energy_j / c
+
+
+def blaster_report():
+    """Full honest analysis of the p-B11 photon-bolt pistol: real energy budget,
+    real focal damage, and the honest walls -- returned as a scorecard."""
+    e_delivered = PHYS["blaster_shots_target"] * PHYS["fifty_bmg_energy_j"]
+    n_ideal = pb11_reactions_for_energy(e_delivered, 1.0)          # doc's ~100% assumption
+    n_real = pb11_reactions_for_energy(e_delivered, PHYS["blaster_conv_eff"])
+    fuel_ideal_ug = pb11_fuel_mass_kg(n_ideal) * 1e9
+    fuel_real_ug = pb11_fuel_mass_kg(n_real) * 1e9
+    p_peak = pulse_peak_power_w(e_delivered, PHYS["blaster_pulse_s"])
+    fluence = focal_fluence_j_cm2(e_delivered, PHYS["blaster_focal_spot_mm"])
+    ablation_margin = fluence / PHYS["ablation_threshold_j_cm2"]
+    spot_at_range = diffraction_divergence_spot_mm(PHYS["blaster_aperture_mm"], PHYS["blaster_range_m"])
+    stays_tight = spot_at_range < 2.0 * PHYS["blaster_aperture_mm"]
+    recoil = photon_recoil_ns(e_delivered)
+    bullet_recoil = 15.0                                           # ~.50 BMG momentum, kg*m/s
+    functions = [
+        ("Delivers 2x .50-BMG energy", "PASS",
+         f"{e_delivered/1000:.0f} kJ from {n_real:.2e} p-B11 reactions (~{fuel_real_ug:.1f} ug fuel "
+         f"at {PHYS['blaster_conv_eff']*100:.0f}% conv; {fuel_ideal_ug:.1f} ug at the doc's 100%)"),
+        ("Devastating focal damage", "PASS",
+         f"fluence {fluence:.2e} J/cm^2 at a {PHYS['blaster_focal_spot_mm']:.0f} mm spot = "
+         f"{ablation_margin:.0e}x the metal ablation threshold -> vaporises the target"),
+        ("Beam stays tight to range", "PASS",
+         f"a {PHYS['blaster_aperture_mm']:.0f} mm aperture diffracts to only "
+         f"{spot_at_range:.0f} mm at {PHYS['blaster_range_m']:.0f} m (big aperture -> low divergence)"),
+        ("Aneutronic clean fuel", "PASS",
+         "p+11B -> 3 alpha is genuinely aneutronic (no neutron activation) -- real chemistry"),
+        ("Handheld p-B11 fusion source", "WALL",
+         "aneutronic p-B11 has NEVER reached net energy (needs ~600 keV ions, huge density); a "
+         "handheld igniting micro-DPF is far beyond current tech -- the true blocker"),
+        ("X-ray -> visible ~100% conversion", "PARTIAL",
+         f"real down-conversion + collection is a fraction, not unity; at {PHYS['blaster_conv_eff']*100:.0f}% you "
+         f"burn {fuel_real_ug/fuel_ideal_ug:.1f}x more fuel per shot"),
+        ("'Solid photon bullet' in flight", "FICTION",
+         f"once free of the crystal it is LIGHT: it travels at c (arrives instantly, not a slow bolt) "
+         f"and its recoil is p=E/c={recoil*1000:.1f} mN*s = {recoil/bullet_recoil:.0e}x a bullet's -- no kick, no mass"),
+        ("Photonic-crystal densification", "PARTIAL",
+         "slow-light spatiotemporal solitons ('light bullets') are real INSIDE a nonlinear medium; "
+         "they do not persist as a dense free-space slug -- the crystal shapes the pulse, not a projectile"),
+    ]
+    n_pass = sum(1 for _, s, _ in functions if s == "PASS")
+    return dict(
+        e_delivered_j=e_delivered, n_reactions=n_real, fuel_real_ug=fuel_real_ug,
+        fuel_ideal_ug=fuel_ideal_ug, p_peak_w=p_peak, fluence_j_cm2=fluence,
+        ablation_margin=ablation_margin, spot_at_range_mm=spot_at_range,
+        stays_tight=stays_tight, recoil_ns=recoil, functions=functions,
+        n_pass=n_pass, n_total=len(functions),
+    )
+
+
+def optimize_blaster():
+    """Optimise / UPGRADE the pistol ('PEWDIEPIE'): report the DAMAGE EFFICIENCY
+    (kJ delivered per ug of fuel) at the upgraded conversion efficiency and
+    tighter focal spot, and how a bigger charge scales the shot (the doc's
+    'P-B11 charge size determines this'). Real, self-consistent p-B11 energetics."""
+    r = blaster_report()
+    kj_per_ug = (r["e_delivered_j"] / 1000.0) / r["fuel_real_ug"]
+    # a bigger charge (e.g. 3x) scales delivered energy + damage linearly
+    big_shots = 3.0
+    big_e = big_shots * PHYS["fifty_bmg_energy_j"]
+    big_fuel_ug = pb11_fuel_mass_kg(pb11_reactions_for_energy(big_e, PHYS["blaster_conv_eff"])) * 1e9
+    big_fluence = focal_fluence_j_cm2(big_e, PHYS["blaster_focal_spot_mm"])
+    return dict(
+        conv_eff=PHYS["blaster_conv_eff"], focal_spot_mm=PHYS["blaster_focal_spot_mm"],
+        kj_per_ug=kj_per_ug, fluence_j_cm2=r["fluence_j_cm2"],
+        ablation_margin=r["ablation_margin"], fuel_real_ug=r["fuel_real_ug"],
+        big_shots=big_shots, big_energy_kj=big_e / 1000.0, big_fuel_ug=big_fuel_ug,
+        big_fluence_j_cm2=big_fluence,
+    )
+
+
+# =============================================================================
+# SECTION 4f -- FULL-SYSTEM "solve EVERY barrier" (assume massive parallel R&D)
+# =============================================================================
+# Treat every wall as a solvable engineering problem. Each workaround below is
+# modelled with REAL physics that computes what it would TAKE, and every result
+# is tagged: REAL (buildable now) / FRONTIER (physics sound, beyond current tech
+# but not forbidden) / ASSUMED (needs an undemonstrated breakthrough). Nothing
+# is faked -- the honesty is in the tags and the residual numbers.
+
+def alfven_speed_m_s(b_t, density_m3, ion_mass_amu):
+    """Alfven speed v_A = B / sqrt(mu0 * rho), rho = n * m_ion. Sets how fast
+    MHD (kink/sausage) instabilities of a Z-pinch grow."""
+    rho = density_m3 * ion_mass_amu * 1.66053907e-27
+    return b_t / math.sqrt(MU0 * rho) if rho > 0 else float("inf")
+
+
+def mhd_growth_rate_hz(v_alfven_m_s, radius_m):
+    """Order-of-magnitude MHD instability growth rate gamma ~ v_A / a: a
+    current-carrying plasma column kinks/sausages on this timescale. This is the
+    real reason a free plasma blade won't just stand still."""
+    return v_alfven_m_s / radius_m if radius_m > 0 else float("inf")
+
+
+def stabilization_margin(feedback_bandwidth_hz, growth_rate_hz):
+    """Active feedback can suppress an instability only if the control loop is
+    FASTER than the mode grows: margin = f_feedback / gamma. Margin >> 1 means
+    the loop can catch and cancel the mode (as tokamak RWM/NTM control does at
+    kHz -- here we need GHz for the fast kink, which is the FRONTIER part)."""
+    return feedback_bandwidth_hz / growth_rate_hz if growth_rate_hz > 0 else float("inf")
+
+
+def chemical_primary_runtime_s(power_w, fuel_kg, energy_density_j_kg, eff):
+    """Runtime from a chemical primary (metal-fuel combustion): t = (fuel *
+    HoC * eta) / P. Chemical energy density (~31 MJ/kg for Al) is ~100x a
+    battery, so this genuinely buys minutes -- the honest cost is fuel-flow mass."""
+    return fuel_kg * energy_density_j_kg * eff / power_w if power_w > 0 else float("inf")
+
+
+def blade_radiant_flux_w_m2(blade_power_w, length_m, standoff_m, forward_frac):
+    """Radiant flux reaching the wielder's hand from the glowing blade itself
+    (NOT the hilt): treat the blade as a line source of power radiating to a
+    point at `standoff_m`; a dielectric sheath re-vectors `forward_frac` of it
+    away. The residual is what still cooks the user -- the honest limit of the
+    'cool grip' (the grip is cool; the metre of plasma next to it is not)."""
+    side_power = blade_power_w * (1.0 - forward_frac)
+    area = 2 * math.pi * standoff_m * length_m           # cylinder around the hand's arc
+    return side_power / area if area > 0 else float("inf")
+
+
+def dense_beam_photon_pressure(target_density_m3, wavelength_m):
+    """Radiation pressure of a beam AT a target photon density, and the beam
+    power it costs (over the blade cross-section): pushing photon density up
+    for more 'solid %' is real but power-prohibitive -- the honest limit of the
+    density route (the magnetic Z-pinch route is far more power-efficient)."""
+    intensity = beam_intensity_for_density(target_density_m3, wavelength_m)
+    p_rad = radiation_pressure_pa(intensity, reflectivity=1.0)
+    return p_rad, intensity
+
+
+def full_system_report():
+    """The complete 'every barrier solved (in principle)' lightsaber system.
+    Assembles the six barriers, each with the workaround PHYSICS and an honesty
+    tag. Returns the design point + a per-barrier list."""
+    eng = engineered_saber_report()
+    r = PHYS["arc_blade_dia_mm"] * MM / 2.0
+    L = DIMS["blade_len_m"]
+    i = eng["i_design_a"]
+
+    # Barrier 2: active MHD stabilisation
+    b = eng["b_surf_t"]
+    v_a = alfven_speed_m_s(b, PHYS["arc_plasma_density_m3"], PHYS["avg_ion_mass_amu"])
+    gamma = mhd_growth_rate_hz(v_a, r)
+    stab = stabilization_margin(PHYS["feedback_bandwidth_hz"], gamma)
+
+    # Barrier 3: chemical-primary runtime
+    p_arc = eng["p_arc_w"]
+    p_idle = eng["power"]["p_idle_w"]
+    hilt_chem_s = chemical_primary_runtime_s(p_idle, PHYS["hilt_fuel_kg"],
+                                             PHYS["chem_heat_of_combustion_j_kg"], PHYS["chem_to_arc_eff"])
+    pack_chem_s = chemical_primary_runtime_s(p_idle, PHYS["backpack_fuel_kg"],
+                                             PHYS["chem_heat_of_combustion_j_kg"], PHYS["chem_to_arc_eff"])
+
+    # Barrier 5: residual radiant flux to the user (sun is ~1360 W/m^2 for scale)
+    flux = blade_radiant_flux_w_m2(p_arc, L, PHYS["blade_standoff_m"], PHYS["sheath_forward_frac"])
+    suns = flux / 1360.0
+
+    # Barrier 1: density route (power-prohibitive) vs magnetic route (efficient)
+    p_rad_dense, i_dense = dense_beam_photon_pressure(PHYS["dense_photon_target_m3"], 500 * NM)
+    p_dense_beam = i_dense * math.pi * r ** 2
+
+    barriers = [
+        ("1 Solid light (dense photon-plasma)", "SOLVED-REDEFINED",
+         f"magnetic Z-pinch pressure {eng['p_mag_pa']/1000:.0f} kPa + radiation gives "
+         f"{eng['solid_percent']:.0f}% 'solid' (effective shear-LIKE >10 kPa on a slow push). "
+         f"Pushing photon density to {PHYS['dense_photon_target_m3']:.0e}/m^3 would add "
+         f"{p_rad_dense/1000:.0f} kPa but costs {p_dense_beam/1e6:.0f} MW -- so the magnetic route wins"),
+        ("2 Plasma instability (kink/sausage)", "FRONTIER",
+         f"growth rate gamma = v_A/a = {gamma:.1e} Hz (v_A={v_a/1000:.0f} km/s); active feedback at "
+         f"{PHYS['feedback_bandwidth_hz']:.0e} Hz over {PHYS['stab_control_channels']} channels -> "
+         f"margin {stab:.0f}x. Stabilisable IN PRINCIPLE (as tokamaks do at kHz); GHz control of a "
+         f"metre free-air arc is beyond today's tech -- FRONTIER, not forbidden"),
+        ("3 Energy density / runtime", "SOLVED-REAL",
+         f"chemical primary (metal fuel, {PHYS['chem_heat_of_combustion_j_kg']/1e6:.0f} MJ/kg ~= "
+         f"{PHYS['chem_heat_of_combustion_j_kg']/3.6e6:.1f} kWh/kg, ~100x a battery): "
+         f"{hilt_chem_s:.0f} s on {PHYS['hilt_fuel_kg']:.1f} kg hilt fuel, "
+         f"{pack_chem_s/60:.1f} min on {PHYS['backpack_fuel_kg']:.0f} kg backpack + supercap peaks"),
+        ("4 Current return / safety", "FRONTIER",
+         "coaxial return (inner current out, outer sheath back -- real coaxial-plasma-gun geometry) or a "
+         "dielectric plasma sheath closes the circuit; a small net-current imbalance still gives the "
+         "blade-vs-blade clash. Safe high-kA handling is engineering, not a physics wall"),
+        ("5 Heat radiated at the user", "PARTIAL",
+         f"grip stays <45 C (real stack). But the BLADE radiates: even with a sheath re-vectoring "
+         f"{PHYS['sheath_forward_frac']*100:.0f}% forward, ~{flux/1000:.0f} kW/m^2 (~{suns:.0f} suns) still "
+         f"reaches the hand at {PHYS['blade_standoff_m']*100:.0f} cm. Mitigated, not eliminated -- honest"),
+        ("6 Handheld fusion", "DROPPED",
+         "pure p-B11 fusion is dropped for the saber (never net-energy); the chemical primary is the "
+         "baseline. Micro-fusion assist only IF that breakthrough is later assumed"),
+    ]
+    n_real = sum(1 for _, s, _ in barriers if s.startswith("SOLVED"))
+    n_frontier = sum(1 for _, s, _ in barriers if s in ("FRONTIER", "PARTIAL"))
+    return dict(
+        barriers=barriers, n_real=n_real, n_frontier=n_frontier, n_total=len(barriers),
+        gamma_hz=gamma, v_alfven_m_s=v_a, stab_margin=stab,
+        hilt_chem_s=hilt_chem_s, pack_chem_s=pack_chem_s,
+        radiant_flux_w_m2=flux, radiant_suns=suns,
+        dense_p_rad_pa=p_rad_dense, dense_beam_power_w=p_dense_beam,
+        i_design_a=i, solid_percent=eng["solid_percent"], p_arc_w=p_arc,
+    )
+
+
+def optimize_system(iters=None, seed=117):
+    """Parameter-space search (a stand-in for the '10M-agent optimisation loop')
+    over blade current, diameter, plasma density and feedback bandwidth, scoring
+    each candidate by 'solid %' subject to the REAL constraints: the column must
+    be Bennett-confined, the active feedback must beat the MHD growth rate
+    (stability), and the self-contained runtime must clear the minimum. Returns
+    the best DISCOVERED regime -- honestly, the best point in the sampled space,
+    not a magic solution."""
+    iters = PHYS["system_search_iters"] if iters is None else iters
+    rng = random.Random(seed)
+    best = None
+    for _ in range(iters):
+        i_a = rng.uniform(1500.0, 6000.0)
+        dia_mm = rng.uniform(5.0, 14.0)
+        dens = 10 ** rng.uniform(21.0, 22.5)
+        fb_hz = 10 ** rng.uniform(8.0, 10.0)
+        rad = dia_mm * MM / 2.0
+        i_bennett = bennett_pinch_current_a(dens, rad, PHYS["arc_plasma_temp_k"])
+        if i_a < i_bennett:
+            continue                                    # not confined
+        b = z_pinch_surface_field_t(i_a, rad)
+        v_a = alfven_speed_m_s(b, dens, PHYS["avg_ion_mass_amu"])
+        gamma = mhd_growth_rate_hz(v_a, rad)
+        if stabilization_margin(fb_hz, gamma) < 10.0:
+            continue                                    # not stabilisable with margin
+        p_arc = arc_column_power_w(i_a, DIMS["blade_len_m"], PHYS["arc_field_gradient_v_m"])
+        p_idle = idle_power_w(i_a, i_bennett, DIMS["blade_len_m"], PHYS["arc_field_gradient_v_m"])
+        runtime = chemical_primary_runtime_s(p_idle, PHYS["hilt_fuel_kg"],
+                                             PHYS["chem_heat_of_combustion_j_kg"], PHYS["chem_to_arc_eff"])
+        if runtime < PHYS["min_runtime_s"]:
+            continue                                    # not self-contained
+        p_mag = magnetic_pressure_pa(b)
+        p_rad = radiation_pressure_pa(p_arc / (math.pi * rad ** 2), 1.0)
+        solid = solid_pct(p_mag + p_rad)
+        score = solid                                   # maximise solid % within the feasible set
+        if best is None or score > best["score"]:
+            best = dict(score=score, current_a=i_a, dia_mm=dia_mm, density_m3=dens,
+                        feedback_hz=fb_hz, solid_pct=solid, p_arc_w=p_arc,
+                        runtime_s=runtime, stab_margin=stabilization_margin(fb_hz, gamma))
+    return best or dict(score=0.0, solid_pct=0.0, note="no feasible point found")
 
 
 def full_feasibility_report(blade_len_m=None, blade_d_mm=None, plasma_temp_k=None):
@@ -2232,6 +2705,111 @@ def _annulus_arc(r_out, r_in, z0, z1, a0, a1, seg=48):
     return verts, faces
 
 
+def build_blaster(fired=False):
+    """The p-B11 photon-bolt pistol (Projectgoal2.md), to scale. Muzzle at
+    front (-Z), receiver back along +Z, pistol grip hanging below. Front->back:
+    adaptive-optics muzzle, reflective barrel, photonic-crystal densifier,
+    p-B11 DPF fusion chamber, then the receiver + grip/magazine. When `fired`,
+    the 2-inch disc + cone-nose photon bolt is shown leaving the muzzle."""
+    parts = []
+    def zc(name): return DIMS[name] * MM
+
+    body_r = DIMS["bl_body_od_mm"] * MM / 2.0
+    z = 0.0
+
+    # ---- adaptive-optics muzzle ring (front) -------------------------------
+    mz_r = DIMS["bl_muzzle_od_mm"] * MM / 2.0
+    v, f = _annulus(mz_r, mz_r - 0.004, z, z + 0.010, seg=32)
+    parts.append(Part("bl_muzzle", "Adaptive-Optics Muzzle (rangefinder + MEMS focus)",
+                       [Mesh(v, f, C_BL_MUZZLE, "muzzle")],
+                       ["LiDAR rangefinder + MEMS mirrors auto-focus the bolt",
+                        "to the target distance (collimation set per shot)"],
+                       order=0, explode=(0, 0, -0.10)))
+    z += 0.010
+
+    # ---- reflective barrel -------------------------------------------------
+    br_r = DIMS["bl_barrel_od_mm"] * MM / 2.0
+    blen = DIMS["bl_barrel_len_mm"] * MM
+    v, f = _annulus(br_r, br_r - 0.003, z, z + blen, seg=28)
+    parts.append(Part("bl_barrel", "Reflective Barrel (mirror-angled, forward-biased)",
+                       [Mesh(v, f, C_BL_BARREL, "barrel")],
+                       ["dielectric + grazing-incidence mirrors vector every",
+                        "photon forward -- near-zero dwell, ~100% out the muzzle"],
+                       order=1, explode=(0, 0, -0.06)))
+    z += blen
+
+    # ---- photonic-crystal densifier ----------------------------------------
+    cr_r = DIMS["bl_crystal_od_mm"] * MM / 2.0
+    clen = DIMS["bl_crystal_len_mm"] * MM
+    v, f = _solid_cylinder(cr_r, z, z + clen, seg=28)
+    # a few slow-light lattice grooves for visual detail
+    groove = []
+    for i in range(4):
+        gz = z + (i + 0.5) * clen / 4
+        gv, gf = _annulus(cr_r + 0.001, cr_r - 0.001, gz - 0.002, gz + 0.002, seg=28)
+        groove.append((gv, gf))
+    gv, gf = _combine(groove)
+    parts.append(Part("bl_crystal", "Photonic-Crystal Densifier (slow-light soliton)",
+                       [Mesh(v, f, C_BL_CRYSTAL, "PhC densifier"), Mesh(gv, gf, C_BL_MUZZLE, "lattice")],
+                       ["slow-light loop densifies + groups the photons into a",
+                        "coherent packet (spatiotemporal 'light bullet' IN the crystal)"],
+                       order=2, explode=(0, 0, -0.03)))
+    z += clen
+
+    # ---- p-B11 DPF fusion chamber ------------------------------------------
+    ch_r = DIMS["bl_chamber_od_mm"] * MM / 2.0
+    chlen = DIMS["bl_chamber_len_mm"] * MM
+    v, f = _solid_cylinder(ch_r, z, z + chlen, seg=28)
+    parts.append(Part("bl_chamber", "p-B11 Dense-Plasma-Focus Fusion Chamber",
+                       [Mesh(v, f, C_BL_CHAMBER, "DPF chamber")],
+                       [f"p + 11B -> 3 alpha + {PHYS['pb11_energy_mev']:.1f} MeV (aneutronic)",
+                        "a ~0.5 ug fuel speck -> 36 kJ = 2x .50 BMG per shot"],
+                       order=3, explode=(0, 0.05, 0.0)))
+    z += chlen
+
+    # ---- receiver / body + rail --------------------------------------------
+    body_len = DIMS["bl_body_len_mm"] * MM
+    z_body1 = body_len
+    v, f = _annulus(body_r, body_r - 0.004, z, z_body1, seg=28)
+    v2, f2 = _box(0, body_r * 0.7, (z + z_body1) / 2, 0.008, 0.006, (z_body1 - z) * 0.6)  # top rail
+    vv, ff = _combine([(v, f), (v2, f2)])
+    parts.append(Part("bl_body", "Receiver / Body (matte, glowing PhC accents)",
+                       [Mesh(vv, ff, C_BL_BODY, "receiver")],
+                       [f"{DIMS['bl_body_len_mm']:.0f} mm x {DIMS['bl_body_od_mm']:.0f} mm, "
+                        f"~{PHYS['blaster_mass_kg']:.1f} kg pistol form", "top optics rail"],
+                       order=4, explode=(0, 0, 0.06)))
+
+    # ---- pistol grip + fuel magazine (hangs below the rear) ----------------
+    grip_len = DIMS["bl_grip_len_mm"] * MM
+    grip_r = DIMS["bl_grip_od_mm"] * MM / 2.0
+    grip_z = z_body1 - 0.05
+    ang = math.radians(DIMS["bl_grip_angle_deg"] - 90.0)
+    gv, gf = _solid_cylinder(grip_r, 0.0, grip_len, seg=20)
+    R = rot_x(math.pi / 2 + ang)             # point it down (-Y), raked
+    gv = (np.asarray(gv) @ R.T + np.array([0, -body_r, grip_z])).tolist()
+    parts.append(Part("bl_grip", "Grip + Fuel-Pellet Magazine",
+                       [Mesh(gv, gf, C_BL_GRIP, "grip")],
+                       ["drop-in magazine of p-B11 fuel pellets (dozens of shots)",
+                        "trigger + safety interlocks in the frame"],
+                       order=5, explode=(0, -0.05, 0.0)))
+
+    # ---- the photon bolt leaving the muzzle (only when fired) --------------
+    if fired:
+        disc_r = DIMS["bl_bolt_disc_mm"] * MM / 2.0
+        cone_l = DIMS["bl_bolt_cone_mm"] * MM
+        bolt_z = -0.06                        # out in front of the muzzle
+        v1, f1 = _solid_cylinder(disc_r, bolt_z, bolt_z + 0.014, seg=28)      # flat rear disc
+        v2, f2 = _cone(disc_r, disc_r * 0.02, bolt_z, bolt_z - cone_l, seg=28)  # cone nose forward
+        vv, ff = _combine([(v1, f1), (v2, f2)])
+        parts.append(Part("bl_bolt", "Photon Bolt (2-inch disc + cone nose)",
+                           [Mesh(vv, ff, C_BL_BOLT, "photon bolt")],
+                           ["densified coherent packet; travels at c (arrives instantly)",
+                            "-- a LIGHT pulse, not a slow solid slug (honest: --blaster)"],
+                           order=6, explode=(0, 0, -0.12)))
+
+    return parts, body_len
+
+
 def build_microcavity_showcase():
     """The SAME photonic-crystal microcavity from the hilt, rebuilt at a fixed
     documented zoom (SHOWCASE_ZOOM = 2000x: 1 model-mm on screen = 500 nm
@@ -2516,13 +3094,14 @@ class Renderer:
 # SECTION 7 -- APPLICATION (pygame shell: 3 scenes, live physics HUD, CLI)
 # =============================================================================
 
-SCENES = ("hilt", "engine", "binding", "cut", "showcase")
+SCENES = ("hilt", "engine", "binding", "cut", "showcase", "blaster")
 SCENE_TITLES = {
-    "hilt": "HAND-HELD HILT  (real scale: ~390 mm long, 60-68 mm dia)",
+    "hilt": f"'{BLADE_NAME}' HILT  (real scale: ~390 mm long, 60-68 mm dia)",
     "engine": "INTERNAL ENGINE BAY CLOSE-UP  (combustion-pumped slow-light cavity, no nuclear component)",
     "binding": f"PHOTON-BINDING CUTAWAY  (blade cross-section, {BINDING_ZOOM:.0f}x -- the effects that would bind slowed light)",
     "cut": "MATERIAL CUT TEST  (real ablation energy balance -- [ ]/,/. change temp/material)",
     "showcase": f"PHOTONIC-CRYSTAL MICROCAVITY SHOWCASE  (zoomed {SHOWCASE_ZOOM:.0f}x, true scale ~80 um)",
+    "blaster": f"'{GUN_NAME}' PHOTON-BOLT PISTOL  (p-B11, to scale -- SPACE to fire, --blaster for the math)",
 }
 
 INFO_TEXT = [
@@ -2692,6 +3271,8 @@ class App:
         self.showcase_parts, self.patch_m = build_microcavity_showcase()
         self.material_idx = 4   # start on mild steel
         cut_parts, cut_w, _ = build_cut_test(MATERIAL_KEYS[self.material_idx])
+        self.blaster_fired = False
+        blaster_parts, self.blaster_len = build_blaster(fired=False)
 
         self.renderers = {
             # the hilt is a long thin rod along Z -- orbit around its MIDPOINT
@@ -2720,6 +3301,11 @@ class App:
             "showcase": Renderer(self.showcase_parts, home_az=2.80, home_el=0.30,
                                   home_dist=self.patch_m * 2.6, scale=self.patch_m,
                                   center=(0, 0, -0.0015)),
+            # the pistol is a long body along +Z with a grip below -- a raking
+            # side view (like the hilt) reads the whole profile
+            "blaster": Renderer(blaster_parts, home_az=1.30, home_el=0.28,
+                                 home_dist=self.blaster_len * 1.9, scale=self.blaster_len,
+                                 center=(0, -0.01, self.blaster_len / 2)),
         }
         self.cut_w = cut_w
         self.cut_rep = None
@@ -2823,6 +3409,13 @@ class App:
         self.cut_w = w
         return rep
 
+    def _fire_blaster(self):
+        """Toggle the photon bolt leaving the muzzle (rebuild the pistol with/
+        without the bolt), preserving the camera."""
+        self.blaster_fired = not self.blaster_fired
+        parts, _ = build_blaster(fired=self.blaster_fired)
+        self.renderers["blaster"].parts = parts
+
     def _toggle_engine_armed(self):
         if self.engine_armed:
             self.engine_armed = False
@@ -2845,7 +3438,7 @@ class App:
         self.sliders = []
 
         scenes = (("HILT", "hilt"), ("ENGINE", "engine"), ("BIND", "binding"),
-                  ("CUT", "cut"), ("MICRO", "showcase"))
+                  ("CUT", "cut"), ("MICRO", "showcase"), ("BLAST", "blaster"))
         bw = (w - gap * 2) // 3
         for i, (label, key) in enumerate(scenes):
             row, col = divmod(i, 3)
@@ -2946,6 +3539,8 @@ class App:
                     self.scene = "cut"
                 elif e.key == pygame.K_5:
                     self.scene = "showcase"
+                elif e.key == pygame.K_6:
+                    self.scene = "blaster"
                 elif e.key == pygame.K_COMMA:
                     self._cycle_material(-1)
                 elif e.key == pygame.K_PERIOD:
@@ -2962,9 +3557,11 @@ class App:
                     self._rend().reset_view()
                 elif e.key in (pygame.K_SPACE, pygame.K_b):
                     # context-sensitive: run/pause the live cut in the CUT scene,
-                    # otherwise ignite/extinguish the blade
+                    # FIRE the bolt in the BLASTER scene, else ignite the blade
                     if self.scene == "cut":
                         self._toggle_cut_run()
+                    elif self.scene == "blaster":
+                        self._fire_blaster()
                     else:
                         self.ignited = not self.ignited
                 elif e.key == pygame.K_UP:
@@ -3089,6 +3686,8 @@ class App:
                 self._draw_binding_panel()
             elif self.scene == "cut":
                 self._draw_cut_panel()
+            elif self.scene == "blaster":
+                self._draw_blaster_panel()
             else:
                 self._draw_physics_panel()
         self._draw_controls_panel()
@@ -3127,7 +3726,7 @@ class App:
     def _draw_controls_bar(self):
         y = self.H - 26
         _panel(self.screen, 0, y, self.W, 26, alpha=225)
-        txt = ("1-5 scene  orbit/wheel/R-M  E explode  X section  L labels  P blueprint  "
+        txt = ("1-6 scene  orbit/wheel/R-M  E explode  X section  L labels  P blueprint  "
                "SPACE ignite/run-cut  F arm  UP/DN len  L/R dia  [ ] temp  ,/. material  "
                "I info  M math  O export  ESC quit")
         img = self.font_sm.render(txt, True, C_TEXT_DIM)
@@ -3184,11 +3783,12 @@ class App:
              f"(steady-state impossible)", C_BAD),
             ("ASPIRATIONAL SOLID BEAM (NOT built)", None),
             (f" target n / BEC critical n_c: {rpt['ratio_solid']:.2e}x", C_BAD),
-            ("ENGINEERED-AROUND (magnetic arc -- python3 LS.py --engineer)", None),
-            (f" clash {PHYS['clash_force_target_n']:.0f} N via Ampere force @ {eng['i_design_a']:.0f} A; "
-             f"Z-pinch {eng['p_mag_pa']/1000:.1f} kPa", C_GOOD),
-            (f" real cost: {eng['p_arc_w']/1e6:.1f} MW arc, kA-lethal -> {eng['n_pass']} PASS / "
-             f"{eng['n_partial']} PARTIAL of {eng['n_total']}", C_WARN),
+            (f"'{BLADE_NAME}' -- OPTIMISED arc blade (python3 LS.py --engineer)", None),
+            (f" clash {eng['clash_force_opt_n']:.0f} N @ {eng['i_design_a']:.0f} A; "
+             f"Z-pinch {eng['p_mag_pa']/1000:.1f} kPa -> {eng['solid_percent']:.0f}% SOLID", C_GOOD),
+            (f" self-contained: {eng['power']['hilt_glow_s']:.0f} s/hilt, "
+             f"{eng['power']['backpack_glow_s']:.0f} s/backpack ({eng['p_arc_w']/1e6:.1f} MW arc)", C_GOOD),
+            (f" LETHAL weapon by design -> {eng['n_pass']} of {eng['n_total']} functions PASS", C_WARN),
         ]
         h = 14 + len(lines) * 15
         _panel(self.screen, x, y, w, h)
@@ -3252,6 +3852,15 @@ class App:
             (f"   T_max={b['t_ceiling_k']:.0f} K; plasma is {b['thermal_ratio']:.0f}x too hot",
              C_BAD),
         ]
+        # REDEFINED 'solid light' = maximally-dense photon gas (the buildable win)
+        eng = engineered_saber_report()
+        lines += [
+            ("=> SOLID LIGHT, REDEFINED: dense photon gas", None),
+            (f"   density {eng['photon_density_m3']:.1e} /m3 (target 1e20-1e25)", C_GOOD),
+            (f"   radiation {eng['rad_pressure_pa']:.0f} Pa + Z-pinch {eng['p_mag_pa']/1000:.1f} kPa "
+             f"= {eng['solid_percent']:.0f}% SOLID", C_GOOD),
+            (f"   resists slow push, flows around fast (real, not rigid)", C_TEXT_DIM),
+        ]
         self._draw_line_panel(lines)
 
     def _draw_cut_panel(self):
@@ -3294,6 +3903,29 @@ class App:
              f"t={self.cut_elapsed_s:.1f} s", C_TEXT_DIM),
         ]
         self._draw_line_panel(lines, w=min(430, self.W - 20))
+
+    def _draw_blaster_panel(self):
+        r = blaster_report()
+        lines = [
+            (f"'{GUN_NAME}'  (SPACE to fire -- python3 LS.py --blaster)", None),
+            ("FUEL & ENERGY (real, self-consistent)", C_ACCENT),
+            (f" p + 11B -> 3 alpha + {PHYS['pb11_energy_mev']:.1f} MeV (aneutronic)", C_TEXT_DIM),
+            (f" {r['e_delivered_j']/1000:.0f} kJ/shot = 2x .50 BMG from ~{r['fuel_real_ug']:.1f} ug fuel", C_GOOD),
+            (f" {r['n_reactions']:.1e} reactions, {r['p_peak_w']/1e12:.0f} TW peak / "
+             f"{PHYS['blaster_pulse_s']*1e9:.2f} ns", C_TEXT_DIM),
+            ("DAMAGE AT THE FOCAL POINT", C_ACCENT),
+            (f" fluence {r['fluence_j_cm2']:.1e} J/cm2 = {r['ablation_margin']:.0e}x ablation", C_GOOD),
+            (f" beam stays {r['spot_at_range_mm']:.0f} mm tight at {PHYS['blaster_range_m']:.0f} m", C_TEXT_DIM),
+            ("HONEST WALLS", C_ACCENT),
+            (f" handheld p-B11 fusion: never reached net energy (WALL)", C_BAD),
+            (f" 'solid bolt' is LIGHT: flies at c, recoil {r['recoil_ns']*1000:.2f} mN.s "
+             f"({r['recoil_ns']/15.0:.0e}x a bullet)", C_BAD),
+            (f" -> real fusion-pumped DEW; the slow glowing slug is fiction", C_WARN),
+            (f" scorecard: {r['n_pass']} of {r['n_total']} PASS", C_TEXT_DIM),
+            (f" {'FIRED -- bolt away' if self.blaster_fired else 'ready (SPACE to fire)'}",
+             C_GOOD if self.blaster_fired else C_TEXT_DIM),
+        ]
+        self._draw_line_panel(lines, w=min(440, self.W - 20))
 
     @staticmethod
     def _dim_string(m):
@@ -3841,10 +4473,104 @@ def selftest():
               1000.0 < eng["i_design_a"] < 20000.0)
         check("the arc-power price is real and large (MW-class): a cost, honestly reported",
               eng["p_arc_w"] > 1e6)
-        check("engineered scorecard is mostly PASS with honest PARTIALs (no fabricated success)",
-              eng["n_pass"] >= 4 and eng["n_partial"] >= 1)
+        # self-contained power now finished (was PARTIAL) -- with honest physics
+        pw = eng["power"]
+        check("self-contained: idle current stays ABOVE the Bennett confinement current (stays lit)",
+              eng["i_design_a"] * PHYS["idle_current_frac"] > eng["i_bennett_a"])
+        check("self-contained: an in-hilt pack gives a usable ignite-for-a-fight window (>=5 s)",
+              pw["self_contained"] and pw["hilt_glow_s"] >= 5.0)
+        check("scorecard is mostly PASS (self-contained finished): no fabricated success",
+              eng["n_pass"] >= 6)
+        # lethality: it is a WEAPON by design (kept intentionally lethal)
+        leth = eng["lethality"]
+        check("it is a WEAPON by design: cuts flesh instantly and stores >> a lethal dose",
+              leth["flesh_recession_mm_s"] > 10.0 and leth["lethal_margin"] > 100.0)
+        # the REAL 'solid light' (photonic Mott insulator) -- honest wall
+        mott = eng["mott"]
+        check("real 'solid light' (photonic Mott insulator) is crystalline (U/J > 3.4) but cryogenic",
+              mott["is_solid"] and mott["demo_temp_k"] < 1.0)
+        check("a warm metre solid-light blade is astronomically far (huge temperature gap) -- honest wall",
+              mott["temp_gap"] > 1e4)
+        # 'solid light' REDEFINED as a dense photon gas -- a real, computable metric
+        check("dense-beam photon density lands in the specified 1e20..1e25 /m^3 target band",
+              1e20 <= eng["photon_density_m3"] <= 1e25)
+        check("photon density and radiation pressure are self-consistent (n = (1+R) P_rad / E_photon)",
+              abs(eng["photon_density_m3"] - (eng["rad_pressure_pa"] / (1 + 1.0))
+                  / photon_energy_j(500 * NM)) / eng["photon_density_m3"] < 1e-6)
+        check("effective solid-like stiffness is magnetic-pressure-dominated (kPa class, real 'hold')",
+              eng["eff_stiffness_pa"] > 1000.0 and eng["p_mag_pa"] > eng["rad_pressure_pa"])
+        check("'solid %' is a substantial, honest fraction (dense beam behaves solid-LIKE, not rigid)",
+              20.0 < eng["solid_percent"] < 500.0)
+        # OPTIMISATION: the blade is upgraded to reach the target solid %
+        opt = optimize_saber()
+        check("optimize_saber() reaches at least the target solid % (the upgrade works)",
+              opt["solid_pct"] >= PHYS["target_solid_pct"] - 0.5)
+        check("the optimised design current drives BOTH solid% and a stronger clash (>= nominal)",
+              eng["clash_force_opt_n"] >= PHYS["clash_force_target_n"])
+        check("optimisation keeps the self-contained runtime above the constraint (honest trade held)",
+              opt["meets_runtime"] and opt["runtime_s"] >= PHYS["min_runtime_s"])
     except Exception as ex:
         check(f"engineered_saber_report() raised {ex!r}", False)
+
+    try:
+        bl = blaster_report()
+        finite = all(math.isfinite(v) for v in bl.values() if isinstance(v, float))
+        check("blaster_report() all-finite", finite)
+        check("blaster energy budget is self-consistent (2x .50 BMG = 36 kJ)",
+              abs(bl["e_delivered_j"] - 36000.0) < 1.0)
+        check("p-B11 ideal fuel is a sub-microgram speck (matches the real reaction energetics)",
+              0.3 < bl["fuel_ideal_ug"] < 1.0)
+        check("focal fluence vastly exceeds the metal ablation threshold (real .50-cal-class damage)",
+              bl["ablation_margin"] > 1000.0)
+        check("a 2-inch aperture keeps the beam tight over tens of metres (diffraction is small)",
+              bl["stays_tight"])
+        check("the 'photon bolt' recoil is negligible vs a bullet's (honest: it is light, not a slug)",
+              bl["recoil_ns"] / 15.0 < 1e-3)
+        check("handheld p-B11 fusion is honestly flagged as the true wall (not fabricated)",
+              any(s == "WALL" for _, s, _ in bl["functions"]))
+        # OPTIMISATION / UPGRADE of the gun
+        ob = optimize_blaster()
+        check("optimize_blaster() gives a real damage efficiency (kJ delivered per ug of fuel)",
+              ob["kj_per_ug"] > 0 and math.isfinite(ob["kj_per_ug"]))
+        check("a bigger p-B11 charge scales the shot linearly (charge size sets the energy)",
+              abs(ob["big_energy_kj"] / (bl["e_delivered_j"] / 1000.0) - ob["big_shots"]
+                  * PHYS["fifty_bmg_energy_j"] / bl["e_delivered_j"]) < 1e-6)
+    except Exception as ex:
+        check(f"blaster_report() raised {ex!r}", False)
+
+    try:
+        sysr = full_system_report()
+        finite = all(math.isfinite(v) for v in sysr.values() if isinstance(v, float))
+        check("full_system_report() all-finite", finite)
+        check("all six barriers are addressed, each with an honesty tag (nothing left blank)",
+              sysr["n_total"] == 6 and all(s for _, s, _ in sysr["barriers"]))
+        check("exactly 2 barriers are SOLVED with buildable-today physics; the rest stay FRONTIER/PARTIAL/DROPPED",
+              sysr["n_real"] == 2 and sysr["n_frontier"] == 3)
+        # Barrier 2: the honest inequality is that the arc IS unstable (gamma>0) and
+        # the workaround only works because the assumed feedback beats it with margin
+        check("Barrier 2: the free-air arc is genuinely MHD-unstable (growth rate is positive, MHz-class)",
+              sysr["gamma_hz"] > 1e5)
+        check("Barrier 2: assumed GHz feedback beats the growth rate with a real margin (>10x) -- stabilisable IN PRINCIPLE",
+              sysr["stab_margin"] > 10.0
+              and abs(sysr["stab_margin"] - PHYS["feedback_bandwidth_hz"] / sysr["gamma_hz"]) < 1e-6)
+        # Barrier 3: chemical primary genuinely beats a battery, and the bigger pack lasts longer
+        check("Barrier 3: chemical primary gives a usable self-contained window and the backpack outlasts the hilt",
+              sysr["hilt_chem_s"] >= 5.0 and sysr["pack_chem_s"] > sysr["hilt_chem_s"])
+        # Barrier 5: mitigated, NOT eliminated -- residual blade flux still dwarfs sunlight (honest)
+        check("Barrier 5: residual blade heat at the hand is mitigated but still many suns (honest, not eliminated)",
+              sysr["radiant_suns"] > 1.0 and sysr["radiant_flux_w_m2"] > 1360.0)
+        # Barrier 1: the density route is real but power-prohibitive vs the magnetic route (why we redefine)
+        check("Barrier 1: the pure-density 'solid light' route is power-prohibitive (MW-class), so the magnetic route wins",
+              sysr["dense_beam_power_w"] > 1e6 and sysr["dense_p_rad_pa"] > 0.0)
+        # optimiser: finds a feasible regime (confined + stabilisable + self-contained) that beats target
+        opt = optimize_system(iters=4000)
+        check("optimize_system() discovers a FEASIBLE regime (confined, stab-margin>=10, self-contained>=min runtime)",
+              opt["solid_pct"] > 0.0 and opt["stab_margin"] >= 10.0
+              and opt["runtime_s"] >= PHYS["min_runtime_s"])
+        check("the discovered regime clears the target solid % (the '10M-agent' search actually improves it)",
+              opt["solid_pct"] >= PHYS["target_solid_pct"] - 0.5)
+    except Exception as ex:
+        check(f"full_system_report()/optimize_system() raised {ex!r}", False)
 
     if pygame is not None:
         try:
@@ -3903,13 +4629,18 @@ def selftest():
             for scene in ("hilt", "binding", "cut"):
                 app.scene = scene
                 app._draw()
+            # blaster scene: fire the bolt (rebuild) and draw its panel
+            app.scene = "blaster"; app.show_math = False
+            app._fire_blaster(); app._draw()
+            assert app.blaster_fired and any(p.key == "bl_bolt" for p in app.renderers["blaster"].parts)
+            app._fire_blaster(); app._draw()
             # exercise the button/slider hit-testing path too
             for b in app.buttons:
                 assert b.hit(b.rect.center)
             for s in app.sliders:
                 s.set_from_x(s.rect.centerx)
             app._check_thermal_limit()
-            check("App() builds, draws all 5 scenes + blueprint + overlays, controls hit-test cleanly", True)
+            check("App() builds, draws all 6 scenes + blaster-fire + blueprint + overlays, controls hit-test cleanly", True)
         except Exception as ex:
             check(f"App() smoke test raised {ex!r}", False)
         finally:
@@ -4101,15 +4832,21 @@ def print_engineering():
     work around it with real physics, and print the honest scorecard for a
     REAL (magnetic plasma-arc) lightsaber."""
     r = engineered_saber_report()
+    o = optimize_saber()
     print("=" * 78)
-    print("ENGINEERING AROUND THE WALLS -- can a REAL lightsaber be built? (SECTION 4d)")
+    print(f"'{BLADE_NAME}' -- the OPTIMISED plasma-arc lightsaber blade (SECTION 4d)")
     print("=" * 78)
     print("Rule: every 'impossibility' is an engineering hurdle. The rigid SOLID-LIGHT")
     print("blade is the one true wall (a superfluid has zero static shear) -- so we BYPASS")
     print("it: achieve the FUNCTIONS with a current-carrying magnetic PLASMA-ARC blade.")
+    print(f"\nOPTIMISED / UPGRADED: driven to the target {PHYS['target_solid_pct']:.0f}% 'solid' by "
+          f"raising the current to")
+    print(f"  {o['i_opt_a']:.0f} A ({o['driver']}-driven) -> {o['solid_pct']:.0f}% solid, "
+          f"{o['clash_n']:.0f} N clash, {o['p_arc_w']/1e6:.2f} MW, {o['runtime_s']:.1f} s runtime "
+          f"({'OK' if o['meets_runtime'] else 'tight'})")
     print("\nOne blade current does three real jobs at once:")
-    print(f"  - CLASH:   Ampere force between two blades -> {PHYS['clash_force_target_n']:.0f} N "
-          f"needs I = {r['i_design_a']:.0f} A  ({r['i_full_block_a']:.0f} A for a full "
+    print(f"  - CLASH:   Ampere force between two blades -> {r['clash_force_opt_n']:.0f} N "
+          f"at the optimised I = {r['i_design_a']:.0f} A  ({r['i_full_block_a']:.0f} A for a full "
           f"{PHYS['lateral_load_n']:.0f} N block)")
     print(f"  - CONFINE: Z-pinch/Bennett -> {r['i_bennett_a']:.0f} A confines the plasma; design "
           f"{r['i_design_a']:.0f} A {'EXCEEDS' if r['self_confined'] else 'is below'} it -> "
@@ -4118,6 +4855,15 @@ def print_engineering():
           f"= {r['stiffness_gain']:.0f}x the photon-fluid's 2.4 Pa (B = {r['b_surf_t']:.2f} T)")
     print(f"  - CUT:     steel ablates at {r['steel_recession_mm_s']:.2f} mm/s at "
           f"{PHYS['arc_plasma_temp_k']:.0f} K (diamond still uncuttable -- honest)")
+
+    print(f"\n'SOLID LIGHT' REDEFINED (dense photon gas, not a rigid crystal):")
+    print(f"  beam intensity {r['beam_intensity_w_m2']:.2e} W/m^2 -> photon density "
+          f"{r['photon_density_m3']:.2e} /m^3 (target 1e20-1e25)")
+    print(f"  radiation pressure {r['rad_pressure_pa']:.0f} Pa + Z-pinch {r['p_mag_pa']/1000:.1f} kPa "
+          f"= {r['eff_stiffness_pa']/1000:.1f} kPa effective stiffness")
+    print(f"  -> SOLID% = {r['solid_percent']:.0f}%  (vs a ~10 kPa 'feels solid to a slow push' threshold)")
+    print(f"  it RESISTS a slow push (radiation + magnetic pressure) but FLOWS around fast motion")
+    print(f"  (Landau/superfluid) -- exactly the 'holds slow, parts fast' behaviour you specified.")
 
     pw = r["power"]
     print(f"\nSELF-CONTAINED POWER (finished): the Ampere clash needs NO extra burst -- both")
@@ -4163,6 +4909,94 @@ def print_engineering():
     print("=" * 78)
 
 
+def print_blaster():
+    """The --blaster report: the third device, the p-B11 photon-bolt pistol
+    (Projectgoal2.md). Real energy budget + damage; honest walls."""
+    r = blaster_report()
+    o = optimize_blaster()
+    print("=" * 78)
+    print(f"'{GUN_NAME}' -- the p-B11 photon-bolt pistol, OPTIMISED (SECTION 4e)")
+    print("=" * 78)
+    print("A handheld directed-energy weapon: an aneutronic proton-boron-11 micro-pulse")
+    print("floods a chamber with photons that a photonic crystal shapes into a 2x .50-BMG")
+    print("'photon bolt'. The energy budget is REAL and self-consistent:")
+    print(f"  p + 11B -> 3 alpha + {PHYS['pb11_energy_mev']:.1f} MeV (aneutronic, clean)")
+    print(f"  delivered energy: {r['e_delivered_j']/1000:.0f} kJ (= 2x .50 BMG) from {r['n_reactions']:.2e} reactions")
+    print(f"  fuel per shot: ~{r['fuel_real_ug']:.1f} ug (at UPGRADED {PHYS['blaster_conv_eff']*100:.0f}% conversion; "
+          f"{r['fuel_ideal_ug']:.1f} ug ideal) -- a speck of powder")
+    print(f"  peak power: {r['p_peak_w']/1e12:.0f} TW for {PHYS['blaster_pulse_s']*1e9:.2f} ns")
+    print(f"  focal fluence: {r['fluence_j_cm2']:.1e} J/cm^2 = {r['ablation_margin']:.0e}x the metal ablation")
+    print(f"    threshold -> vaporises the target; beam stays {r['spot_at_range_mm']:.0f} mm tight at "
+          f"{PHYS['blaster_range_m']:.0f} m")
+    print(f"\nOPTIMISED / UPGRADED: {o['conv_eff']*100:.0f}% conversion + a tighter {o['focal_spot_mm']:.0f} mm focal")
+    print(f"  spot -> {o['kj_per_ug']:.1f} kJ delivered per ug of fuel. A bigger charge scales linearly:")
+    print(f"  a {o['big_shots']:.0f}x .50-BMG shot = {o['big_energy_kj']:.0f} kJ from ~{o['big_fuel_ug']:.1f} ug "
+          f"(fluence {o['big_fluence_j_cm2']:.1e} J/cm^2). 'Charge size determines this.'")
+    print("\nHONEST WALLS (the fiction vs the physics):")
+    print(f"  - handheld p-B11 fusion has NEVER reached net energy -- the true blocker")
+    print(f"  - the bolt is LIGHT: it flies at c (arrives instantly, not a slow glowing slug) and its")
+    print(f"    recoil p=E/c={r['recoil_ns']*1000:.2f} mN*s is ~{r['recoil_ns']/15.0:.0e}x a bullet's -> no 'kick', no mass")
+    print(f"  - 'photonic mass / light bullet' is real only INSIDE the crystal; free space it is a pulse")
+    print("\nFUNCTION SCORECARD:")
+    print("-" * 78)
+    for name, status, detail in r["functions"]:
+        print(f"  [{status:8s}] {name}")
+        print(f"             {detail}")
+    print("-" * 78)
+    print(f"RESULT: {r['n_pass']} of {r['n_total']} PASS. As a FUSION-PUMPED DIRECTED-ENERGY WEAPON it")
+    print("delivers real 2x-.50-BMG focal damage at light speed -- IF you had handheld p-B11")
+    print("fusion (you don't, yet). The 'solid photon bullet' visual is fiction; the energy is not.")
+    print("=" * 78)
+
+
+def print_system():
+    """The --system report: the complete 'solve EVERY barrier' lightsaber, each
+    workaround with real physics + an honesty tag, plus the parameter-space
+    optimisation (the stand-in for the 10M-agent loop)."""
+    s = full_system_report()
+    print("=" * 78)
+    print(f"'{BLADE_NAME}' -- COMPLETE SYSTEM: every barrier engineered (in principle) (SECTION 4f)")
+    print("=" * 78)
+    print("Rule: treat every wall as a solvable engineering problem, assume massive parallel")
+    print("R&D. Each workaround is REAL physics with an honesty tag -- nothing is faked.\n")
+    print(f"{'BARRIER':40s} {'STATUS':16s}")
+    print("-" * 78)
+    for name, status, detail in s["barriers"]:
+        print(f"{name:40s} [{status}]")
+        # wrap the detail
+        words, line = detail.split(), "   "
+        for w in words:
+            if len(line) + len(w) + 1 > 92:
+                print(line); line = "   "
+            line += (" " if line != "   " else "") + w
+        print(line)
+    print("-" * 78)
+    print("KEY NUMBERS (all computed from real physics):")
+    print(f"  Barrier 2  MHD growth gamma = v_A/a = {s['gamma_hz']:.1e} Hz "
+          f"(v_A={s['v_alfven_m_s']/1000:.0f} km/s); feedback margin {s['stab_margin']:.0f}x")
+    print(f"  Barrier 3  chemical primary: {s['hilt_chem_s']:.0f} s (hilt fuel), "
+          f"{s['pack_chem_s']/60:.1f} min (backpack) -- ~100x a battery")
+    print(f"  Barrier 5  residual radiant flux at the hand: {s['radiant_flux_w_m2']/1000:.0f} kW/m^2 "
+          f"(~{s['radiant_suns']:.0f} suns) -- mitigated, not eliminated")
+    print(f"  Barrier 1  {s['solid_percent']:.0f}% 'solid' via magnetic route; the density route adds "
+          f"{s['dense_p_rad_pa']/1000:.0f} kPa but needs {s['dense_beam_power_w']/1e6:.0f} MW")
+
+    print(f"\nPARAMETER-SPACE OPTIMISATION ('10M-agent' stand-in: {PHYS['system_search_iters']} samples)")
+    o = optimize_system()
+    if o.get("current_a"):
+        print(f"  best DISCOVERED regime: {o['current_a']:.0f} A, {o['dia_mm']:.1f} mm dia, "
+              f"n={o['density_m3']:.1e}/m^3, feedback {o['feedback_hz']:.1e} Hz")
+        print(f"  -> {o['solid_pct']:.0f}% 'solid', stable (margin {o['stab_margin']:.0f}x), "
+              f"confined, self-contained ({o['runtime_s']:.0f} s) -- the best point in the FEASIBLE set")
+    print("-" * 78)
+    print(f"VERDICT: {s['n_real']} barriers SOLVED with buildable-today physics, "
+          f"{s['n_frontier']} at the engineering FRONTIER (physics-sound, tech beyond today),")
+    print("1 dropped (fusion -> chemical). The system is self-consistent and buildable IN PRINCIPLE;")
+    print("the honest residual is the FRONTIER items (GHz MHD control, kA return, blade radiant heat)")
+    print("and that the 'solid' is a real PRESSURE (>10 kPa), not a zero-shear rigid crystal.")
+    print("=" * 78)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Lightsaber Engineering Digital Twin")
     parser.add_argument("--selftest", action="store_true", help="headless build+physics+render sanity check")
@@ -4171,6 +5005,10 @@ def main():
                         help="print the material cut-test table (optional plasma temperature in K)")
     parser.add_argument("--engineer", action="store_true",
                         help="failure -> engineering-workaround scorecard for a REAL (magnetic plasma-arc) saber")
+    parser.add_argument("--blaster", action="store_true",
+                        help="p-B11 photon-bolt pistol (Projectgoal2.md): real energy budget + damage + honest walls")
+    parser.add_argument("--system", action="store_true",
+                        help="complete 'solve every barrier' lightsaber: workarounds + honesty tags + optimisation")
     parser.add_argument("--report", action="store_true", help="legacy matplotlib charts (aspirational solid-beam)")
     parser.add_argument("--export-obj", action="store_true", help="write OBJ files to ./export/ and exit")
     args = parser.parse_args()
@@ -4186,6 +5024,12 @@ def main():
         return
     if args.engineer:
         print_engineering()
+        return
+    if args.blaster:
+        print_blaster()
+        return
+    if args.system:
+        print_system()
         return
     if args.report:
         legacy_report()
